@@ -113,6 +113,18 @@ Node.js가 설치되지 않았거나, 설치 후 터미널을 새로 열지 않�
   "statusLine": { "type": "command", "command": "node \"/이 폴더 경로/statusline.js\"" }
   ```
 
+**쓰던 상태줄을 그대로 두고 사용량도 보고 싶어요**
+쓰던 상태줄이 스크립트 파일(예: `~/.claude/statusline-command.sh`)이라면, 그 파일이 받은 정보를 `statusline.js` 에도 넘겨 주면 돼요. `statusline.js` 의 출력은 버리니까 터미널 상태줄 모양은 그대로예요. 고치기 전에 원래 파일을 복사해 두세요.
+```bash
+#!/usr/bin/env bash
+INPUT=$(cat)
+# 클로드 오피스: 사용량을 usage.json 에 기록 (화면 출력 없음)
+printf '%s' "$INPUT" | node "/이 폴더 경로/statusline.js" >/dev/null 2>&1
+# 원래 하던 일 — 받은 정보를 $INPUT 으로 넘겨 줌
+printf '%s' "$INPUT" | python "$HOME/.claude/statusline.py"
+```
+상태줄 스크립트는 그릴 때마다 새로 실행되니까 Claude Code를 껐다 켤 필요는 없어요. 다음 답장부터 화면에 나와요.
+
 **사용량 표시를 원래대로 되돌리고 싶어요**
 `~/.claude/settings.json` 에서 `statusLine` 부분을 지우거나, 백업해 둔 `settings.json.before-claude-office` 로 바꿔 넣으면 돼요.
 
