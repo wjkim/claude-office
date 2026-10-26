@@ -661,7 +661,7 @@ function snapshot() {
       return {
         n: i + 1, proj: f.p, name: f.name, mtime, active: now - mtime < ACTIVE_MS, total: list.length,
         sessions: list.slice(0, 40).map(S => ({
-          key: S.key, sid: S.sid, agent: S.agent, work: workOf(S), month: monthMin(S), day: dayOf(S), waiting: waitOf(S), cwd: S.cwd, tools: S.tools, started: S.started, mtime: S.mtime, active: now - S.mtime < ACTIVE_MS,
+          key: S.key, sid: S.sid, agent: S.agent, work: workOf(S), month: monthMin(S), day: dayOf(S), waiting: waitOf(S), closed: S.agent !== 'codex' && !!live && !live.has(S.sid), cwd: S.cwd, tools: S.tools, started: S.started, mtime: S.mtime, active: now - S.mtime < ACTIVE_MS,
           label: S.summary || codexTitles.get(S.sid) || S.firstPrompt || new Date(S.mtime).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
           state: now - S.mtime < HOT_MS ? {
             room: S.room, tool: S.tool, detail: S.detail, mood: S.mood, bubble: S.bubble,

@@ -379,7 +379,14 @@ const BRAND = { claude: 'Claude', codex: 'Codex' };
 // 층마다 붙인 직원 이름 (층 정리 창에서 정함). 없으면 Claude / Codex
 const curProj = () => { const f = SNAP && SNAP.floors.find(x => x.n === curFloorN); return f ? f.proj : ''; };
 const staff = (kind, proj = curProj()) => ((layout.workers[proj] || {})[kind]) || BRAND[kind];
-const nameActor = (W) => { const n = staff(W.kind); W.actor.setName(n, n !== BRAND[W.kind] ? BRAND[W.kind] : ''); };
+// 같은 종류 직원이 한 층에 여럿이면 클팀장 · 클팀원01 … / 코팀장 · 코팀원01 … — 번호는 자리 번호(W.seat, 출근할 때 정해져 퇴근까지 고정)
+const TEAM = { claude: '클', codex: '코' };
+function wname(W) {
+  const same = scene ? [...scene.workers.values()].filter(x => x.kind === W.kind) : [];
+  if (!W.seat && same.filter(x => x !== W).length < 1) return staff(W.kind);
+  return TEAM[W.kind] + (W.seat ? '팀원' + String(W.seat).padStart(2, '0') : '팀장');
+}
+const nameActor = (W) => { const n = wname(W); W.actor.setName(n, n !== staff(W.kind) ? W.dir : n !== BRAND[W.kind] ? BRAND[W.kind] : ''); }; // 팀 이름이면 작업 폴더 이름을 아래에
 const AG_OFF = [0, 1.1, -1.1, 2.1, -2.1, .55];
 const PEOPLE = {
   claude: { body: '#e2733f', hair: '#5b3a26', label: 'Claude', dot: '#e2733f', mark: '✳', ahoge: true },
@@ -832,15 +839,17 @@ function route(from, target) {
   pts.push(target);
   return pts;
 }
-function spotFor(room, idx, kind = 'claude') {
-  const H = HOME[kind] || HOME.claude;
-  if (room === 'report') return pt(H.report[0], H.report[1], 'dev');
-  if (room === 'desk' || room === 'phone' || (room === 'dev' && idx == null)) return pt(H.spot[0], H.spot[1], 'dev');
-  if (room === 'boss') return pt(SPOTS.elevOut[0] + (kind === 'codex' ? .5 : 0), SPOTS.elevOut[1], 'lobby'); // 질문 → 엘리베이터 타고 대표실로
+// 같은 종류 직원이 한 층에 여럿이면 자리(seat)마다 조금씩 비켜 섬 (0 = 원래 자리)
+const SEAT = [[0, 0], [.9, .9], [-.9, .9], [-.9, 1.8], [.9, 1.8], [0, 2.4], [-1.8, .9]];
+function spotFor(room, idx, kind = 'claude', seat = 0) {
+  const H = HOME[kind] || HOME.claude, [sx, sy] = SEAT[seat % SEAT.length];
+  if (room === 'report') return pt(H.report[0] + sx, H.report[1] + sy, 'dev');
+  if (room === 'desk' || room === 'phone' || (room === 'dev' && idx == null)) return pt(H.spot[0] + sx, H.spot[1] + sy, 'dev');
+  if (room === 'boss') return pt(SPOTS.elevOut[0] + (kind === 'codex' ? .5 : 0) + seat * .45, SPOTS.elevOut[1], 'lobby'); // 질문 → 엘리베이터 타고 대표실로
   if (room === 'lobby') return pt(13.6 + ((idx || 0) % 4) * .8, 9.25, 'lobby');
-  const r = ROOMS[room]; if (!r) return spotFor('desk', null, kind);
+  const r = ROOMS[room]; if (!r) return spotFor('desk', null, kind, seat);
   const kOff = kind === 'codex' ? -1.3 : 0;
-  if (idx == null) return pt(Math.max(r.x + .6, r.spot[0] + kOff), r.spot[1], room);
+  if (idx == null) return pt(Math.max(r.x + .6, Math.min(r.x + r.w - .6, r.spot[0] + kOff + sx)), Math.min(r.y + r.h - .6, r.spot[1] + sy), room);
   const base = r.agent || r.spot, off = AG_OFF[idx % AG_OFF.length] + (room === 'dev' ? 0 : .9);
   const x = Math.max(r.x + .6, Math.min(r.x + r.w - .6, base[0] + off));
   return pt(room === 'dev' ? Math.min(x, 10.6) : x, base[1], room);
@@ -876,9 +885,15 @@ function clearScene() { if (!scene) return; scene.workers.forEach(removeWorker);
 function makeWorker(sess) {
   const kind = sess.agent === 'codex' ? 'codex' : 'claude';
   const st = sess.state || { room: 'desk', agents: [], board: [], idle: true };
-  const W = { key: sess.key, kind, agents: new Map(), lastEv: st.idle ? 0 : Date.now(), board: st.board || [],
+  // 자리 번호: 층 폴더에서 일하는 세션(팀장)은 0, 팀원은 비어 있는 가장 작은 번호 (층 폴더 세션이 같이 일하고 있으면 1부터)
+  const kindOf = (s) => s.agent === 'codex' ? 'codex' : 'claude', isLead = (s) => String(s.cwd || '').replace(/\\/g, '/').replace(/\/+$/, '') === curProj();
+  const f = SNAP && SNAP.floors.find(x => x.proj === curProj());
+  const leadOn = !isLead(sess) && f && f.sessions.some(s => s.key !== sess.key && kindOf(s) === kind && isLead(s) && s.state && !s.closed);
+  const used = new Set(scene ? [...scene.workers.values()].filter(x => x.kind === kind).map(x => x.seat) : []);
+  let seat = leadOn ? 1 : 0; while (used.has(seat)) seat++;
+  const W = { key: sess.key, kind, seat, dir: String(sess.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '', agents: new Map(), lastEv: st.idle ? 0 : Date.now(), board: st.board || [],
     tools: sess.tools || 0, started: sess.started || sess.mtime, lastTool: fmtTool(st.tool, st.detail), label: sess.label };
-  const sp = spotFor(st.idle ? 'rest' : (st.room || 'desk'), null, kind);
+  const sp = spotFor(st.idle ? 'rest' : (st.room || 'desk'), null, kind, seat);
   W.actor = new Actor(kind, sp.x, sp.y); nameActor(W);
   // 답 기다리는 중이면 대표실에 올라가 있는 상태로
   if (sess.waiting && Date.now() - sess.waiting < WAIT_MS) { W.actor.x = SPOTS.elevIn[0]; W.actor.y = SPOTS.elevIn[1]; W.actor.away = true; W.upstairs = true; W.actor.badge = 'ask'; }
@@ -901,15 +916,18 @@ function buildScene(sess) {
   $('#alog').innerHTML = '<div class="none">아직 기록이 없어요. 이 층에서 Claude나 Codex가 움직이면 여기에 쌓여요.</div>';
   renderCrew();
 }
-// 같은 층에서 다른 쪽(Claude↔Codex)이 최근에 일하고 있으면 같이 출근시킴
+// 같은 층에서 최근(15분 안)에 일한 다른 세션도 같이 출근시킴 — Orca 워커처럼 같은 종류(Claude·Claude)여도 함께
+// 지금 동작하는 세션: Claude 는 프로세스가 열린 세션(closed 아님), Codex 는 15분 안에 움직였고 작업을 마치지 않은(waiting 아님) 세션
+const running = (s) => s.agent === 'codex' ? !!s.state && !s.waiting : !s.closed;
+const MAX_MATES = 6;
 function syncCompanion() {
   if (!scene || !SNAP) return;
   const P = primary(); if (!P) return;
   const f = SNAP.floors.find(x => x.sessions.some(s => s.key === scene.primary)); if (!f) return;
-  const mate = f.sessions.filter(s => s.key !== scene.primary && s.state && (s.agent === 'codex' ? 'codex' : 'claude') !== P.kind).sort((a, b) => b.mtime - a.mtime)[0];
-  for (const [k, W] of scene.workers) if (k !== scene.primary && (!mate || k !== mate.key)) { removeWorker(W); scene.workers.delete(k); }
-  if (mate && !scene.workers.has(mate.key)) scene.workers.set(mate.key, makeWorker(mate));
-  renderCrew();
+  const mates = new Set(f.sessions.filter(s => s.key !== scene.primary && s.state && running(s)).sort((a, b) => b.mtime - a.mtime).slice(0, MAX_MATES).map(s => s.key));
+  for (const [k, W] of scene.workers) if (k !== scene.primary && !mates.has(k)) leaveWorker(W);
+  for (const s of f.sessions) if (mates.has(s.key) && !scene.workers.has(s.key)) scene.workers.set(s.key, makeWorker(s));
+  scene.workers.forEach(nameActor); renderCrew();
 }
 
 async function spawnAgent(W, e) {
@@ -941,7 +959,7 @@ async function agentDone(W, id) {
   if (A.arriving) { A.doneQueued = true; return; }
   A.leaving = true; A.actor.mood = ''; A.last = '보고하러 가는 중';
   const ok = () => A.leaving && !W.gone;
-  if (!await A.actor.goto(spotFor('report', null, W.kind)) || !ok()) return;
+  if (!await A.actor.goto(spotFor('report', null, W.kind, W.seat)) || !ok()) return;
   A.actor.say('report', '보고', A.info.type === 'Guardian' ? '검토 끝! 진행해도 돼요.' : '끝났어요. 결과 드릴게요!', 1700);
   W.actor.say('', '', '수고했어요', 1600);
   await sleep(1800); if (!ok()) return;
@@ -957,7 +975,7 @@ async function agentDone(W, id) {
 // 질문하면 엘리베이터 타고 대표실로 올라가서 답을 기다림
 async function goUp(W) {
   const c = W.actor, tok = W.upTok = (W.upTok || 0) + 1, ok = () => !W.gone && W.upTok === tok;
-  if (!await c.goto(spotFor('boss', null, W.kind)) || !ok()) return;
+  if (!await c.goto(spotFor('boss', null, W.kind, W.seat)) || !ok()) return;
   elevTarget = 1; await sleep(600); if (!ok()) return;
   if (!await c.walk([SPOTS.elevIn]) || !ok()) return;
   c.away = true; W.upstairs = true; elevTarget = 0; renderCrew();
@@ -972,6 +990,22 @@ function reportToMe(W, text) {
     W.actor.say('report', '대표님!', text || '여기 확인 부탁드려요 🙋', 4000);
     setTimeout(() => { if (scene && scene.me === me) me.say('user', '', '어디 봐요 👀', 2200); }, 1200);
   });
+}
+// 일을 마친 동료는 엘리베이터까지 걸어가서 퇴근 (자리 번호는 사라질 때까지 그대로)
+async function leaveWorker(W) {
+  if (W.leaving) return;
+  W.leaving = true; W.upTok = (W.upTok || 0) + 1; renderCrew(); // 대표실로 올라가던 중이면 멈춤
+  const c = W.actor, ok = () => !W.gone;
+  if (!c.away) { // 대표실에 올라가 있으면 이미 층을 떠난 것 — 그대로 정리
+    c.mood = ''; c.badge = ''; c.say('', '', '👋 퇴근합니다!', 2200);
+    if (await c.walk(route(c, pt(SPOTS.elevOut[0], SPOTS.elevOut[1], 'corridor'))) && ok()) {
+      elevTarget = 1; await sleep(600);
+      if (ok() && await c.walk([SPOTS.elevIn]) && ok()) { elevTarget = 0; await sleep(500); }
+    }
+  }
+  if (W.gone) return;
+  removeWorker(W); if (scene && scene.workers.get(W.key) === W) scene.workers.delete(W.key);
+  if (scene) scene.workers.forEach(nameActor); renderCrew();
 }
 function comeDown(W) {
   const c = W.actor; W.upTok = (W.upTok || 0) + 1; W.upstairs = false;
@@ -1006,7 +1040,7 @@ function onEv(e) {
   }
   if (!scene) return;
   const W = scene.workers.get(e.session);
-  if (!W) { pingFloor(e.session); return; }
+  if (!W || W.leaving) { pingFloor(e.session); return; }
 
   const c = W.actor;
   weatherOn(e);
@@ -1019,14 +1053,14 @@ function onEv(e) {
       if (e.room === 'phone') { if (W.kind === 'claude') scene.ringUntil = performance.now() + 2500; c.badge = 'phone'; c.say('', W.kind === 'claude' ? '에이전트 호출' : '도우미 호출', e.detail || '', 2500); }
       else if (e.room === 'boss') { c.badge = 'ask'; if (scene.me) reportToMe(W, e.detail); else { c.say('', '대표실에 질문하러 가요', e.detail || '', 4000); goUp(W); } break; }
       else c.say('', e.tool, e.detail || ROOM_KO[e.room] || '', 3000);
-      c.goto(spotFor(e.room, null, W.kind));
+      c.goto(spotFor(e.room, null, W.kind, W.seat));
       break;
     }
     case 'wait': if (!W.upstairs) { c.badge = 'ask'; if (scene.me) reportToMe(W); else { c.say('report', '다 했어요!', '대표실에서 답 기다릴게요', 3500); goUp(W); } } break;
     case 'think': c.mood = 'think'; c.say('think', '고민 중…', e.text, 8000); break;
     case 'say': c.mood = ''; c.say('', '', e.text, 6000); break;
     case 'error': c.mood = 'sweat'; c.shakeUntil = performance.now() + 900; c.say('error', '실패', e.text, 5000); setTimeout(() => { if (c.mood === 'sweat') c.mood = ''; }, 5000); break;
-    case 'user': c.mood = ''; c.say('user', `${SNAP.user || '대표'}님 지시`, e.text, 6000); c.goto(spotFor('desk', null, W.kind)); break;
+    case 'user': c.mood = ''; c.say('user', `${SNAP.user || '대표'}님 지시`, e.text, 6000); c.goto(spotFor('desk', null, W.kind, W.seat)); break;
     case 'spawn': spawnAgent(W, e); break;
     case 'agentTool': agentTool(W, e.id, e); break;
     case 'agentErr': { const A = W.agents.get(e.id); if (A) { A.actor.mood = 'sweat'; A.actor.shakeUntil = performance.now() + 900; A.actor.say('error', '실패', e.text, 3500); setTimeout(() => { A.actor.mood = 'work'; }, 3500); } break; }
@@ -1038,13 +1072,14 @@ function onEv(e) {
 setInterval(() => {
   if (!scene) return;
   for (const W of scene.workers.values()) {
+    if (W.leaving) continue;
     if (W.upstairs || W.actor.badge === 'ask') { // 대표실에서 답 기다리는 중 — 세션이 닫혔으면(서버가 대기를 지움) 내려와서 퇴근
       const s = allSessions().find(x => x.key === W.key);
       // 스냅샷이 늦게 올 수 있어서 6초 여유
       if (s && !s.waiting && !W.actor.walking && Date.now() - W.lastEv > 6e3) { comeDown(W); W.actor.badge = ''; W.lastEv = 0; }
       continue;
     }
-    const c = W.actor, idle = Date.now() - W.lastEv, home = spotFor(idle > 120e3 ? 'rest' : 'desk', null, W.kind); // 2분 넘게 쉬면 휴게실로
+    const c = W.actor, idle = Date.now() - W.lastEv, home = spotFor(idle > 120e3 ? 'rest' : 'desk', null, W.kind, W.seat); // 2분 넘게 쉬면 휴게실로
     if (idle > 25e3 && !c.walking && Math.hypot(c.x - home.x, c.y - home.y) > .3) { c.mood = ''; c.goto(home); }
     if (idle > 120e3 && c.badge !== 'coffee') { c.badge = 'coffee'; c.mood = ''; }
   }
@@ -1056,6 +1091,7 @@ const ago = (ms) => { const s = Math.max(0, (Date.now() - ms) / 1000); if (s < 6
 const agoTxt = (ms) => (Date.now() - ms) < 60e3 ? '방금' : ago(ms) + ' 전';
 function workerStatus(W) {
   const c = W.actor, idle = Date.now() - W.lastEv;
+  if (W.leaving) return ['report', '퇴근하는 중'];
   if (!W.upstairs && c.badge === 'ask' && scene.me) return ['think', '대표님께 보고 중'];
   if (W.upstairs || c.badge === 'ask') return ['think', '대표실에서 답 기다리는 중'];
   if (idle > 120e3) return ['rest', '쉬는 중'];
@@ -1073,12 +1109,12 @@ function renderCrew() {
   const ws = [...scene.workers.values()].sort((a, b) => (b.key === scene.primary) - (a.key === scene.primary));
   for (const W of ws) {
     const [sc, st] = workerStatus(W);
-    h += `<div class="cr ${W.kind}" data-w="${esc(W.key)}"><img src="${avatar(W.kind)}" alt=""><div class="m"><div class="r1"><b>${esc(staff(W.kind))}</b><span class="st ${sc}">${st}</span></div>
-      <div class="r2">${esc(W.lastTool || '개발실 자기 자리')}</div><div class="r3">도구 ${W.tools}회 · ${ago(W.started)}째 근무${W.key !== scene.primary ? ' · 같은 층 다른 세션' : ''}</div></div></div>`;
+    h += `<div class="cr ${W.kind}" data-w="${esc(W.key)}"><img src="${avatar(W.kind)}" alt=""><div class="m"><div class="r1"><b>${esc(wname(W))}</b><span class="st ${sc}">${st}</span></div>
+      <div class="r2">${esc(W.lastTool || '개발실 자기 자리')}</div><div class="r3">도구 ${W.tools}회 · ${ago(W.started)}째 근무${W.key !== scene.primary ? ` · 같은 층 다른 세션${W.dir ? ` (${esc(W.dir)})` : ''}` : ''}</div></div></div>`;
     for (const [id, A] of W.agents) {
       const s = A.leaving ? ['report', '보고 중'] : A.actor.mood === 'sweat' ? ['sweat', '진땀'] : A.arriving ? ['rest', '출근 중'] : ['work', '일하는 중'];
       h += `<div class="cr" data-w="${esc(W.key)}" data-a="${esc(id)}"><img src="${avatar(A.actor.kind)}" alt=""><div class="m"><div class="r1"><b>${esc(A.info.desc || plabel(A.info.type))}</b><span class="st ${s[0]}">${s[1]}</span></div>
-        <div class="r2">${esc(plabel(A.info.type))} · ${esc(A.last || '')}</div><div class="r3">${esc(staff(W.kind))} 팀 · 도구 ${A.tools}회 · ${ago(A.since)}째</div></div></div>`;
+        <div class="r2">${esc(plabel(A.info.type))} · ${esc(A.last || '')}</div><div class="r3">${esc(wname(W))} 팀 · 도구 ${A.tools}회 · ${ago(A.since)}째</div></div></div>`;
     }
   }
   $('#crew').innerHTML = h;
@@ -1092,7 +1128,7 @@ $('#crew').addEventListener('click', (ev) => {
   const [sx, sy] = toScreen(a.x, a.y, 30); cam.x += CW / 2 - sx; cam.y += (CH - 60) / 2 - sy;
 });
 function logLine(W, e) {
-  let who = staff(W.kind), kind = W.kind, txt = '';
+  let who = wname(W), kind = W.kind, txt = '';
   const ag = (id) => W.agents.get(id);
   switch (e.k) {
     case 'tool': txt = `${ROOM_KO[e.room] || ''}에서 ${fmtTool(e.tool, e.detail)}`; break;
@@ -1100,7 +1136,7 @@ function logLine(W, e) {
     case 'say': txt = e.text; break;
     case 'error': txt = `⚠ ${e.text}`; break;
     case 'wait': txt = '🛗 대표실에 올라가서 답을 기다려요'; break;
-    case 'user': who = `${SNAP.user || '나'} → ${staff(W.kind)}`; kind = 'me'; txt = e.text; break;
+    case 'user': who = `${SNAP.user || '나'} → ${wname(W)}`; kind = 'me'; txt = e.text; break;
     case 'spawn': who = e.desc || plabel(e.type); kind = pkey(e.type); txt = `${plabel(e.type)}${e.type === 'Guardian' || e.type === 'Helper' ? '' : ' 에이전트'}가 엘리베이터로 출근`; break;
     case 'agentTool': { const A = ag(e.id); who = A ? (A.info.desc || plabel(A.info.type)) : '도우미'; kind = A ? A.actor.kind : 'other'; txt = `${ROOM_KO[e.room] || ''}에서 ${fmtTool(e.tool, e.detail)}`; break; }
     case 'agentDone': { const A = ag(e.id); who = A ? (A.info.desc || plabel(A.info.type)) : '도우미'; kind = A ? A.actor.kind : 'other'; txt = '보고하고 퇴근'; break; }
@@ -1165,10 +1201,11 @@ function renderDir() {
   const now = Date.now();
   const card = (f) => {
     const cur = f.n === curFloorN;
-    const win = f.sessions.slice(0, 10).map(s => `<button class="${s.active ? 'lit' : s.state ? 'warm' : ''} ${s.key === curKey ? 'cur' : ''} ${s.agent === 'codex' ? 'cx' : ''}" data-k="${esc(s.key)}" title="${s.agent === 'codex' ? 'Codex' : 'Claude'} · ${esc(s.label)} · ${agoTxt(s.mtime)}" aria-label="${esc(s.label)}"></button>`).join('');
+    const run = f.sessions.filter(running); // 창문 = 지금 동작하는 세션만
+    const win = run.slice(0, 10).map(s => `<button class="${s.active ? 'lit' : s.state ? 'warm' : ''} ${s.key === curKey ? 'cur' : ''} ${s.agent === 'codex' ? 'cx' : ''}" data-k="${esc(s.key)}" title="${s.agent === 'codex' ? 'Codex' : 'Claude'} · ${esc(s.label)} · ${agoTxt(s.mtime)}" aria-label="${esc(s.label)}"></button>`).join('');
     const al = floorAlert.get(f.proj);
     return `<div class="fl ${cur ? 'cur' : ''} ${now - f.mtime > 864e5 ? 'dim' : ''} ${al || ''}" data-n="${f.n}" tabindex="0"><button class="x" title="층 정리 (이름 · 합치기 · 세션 옮기기 · 숨기기)" aria-label="${esc(f.name)} 층 정리">⋯</button><span class="no jua">${fno(f.n)}</span><b>${esc(f.name)}${al ? `<span class="tag">${al === 'ask' ? '🙋 질문' : '⚠ 에러'}</span>` : ''}</b>
-      <span class="sub">세션 ${f.total}개 · ${f.active ? '일하는 중' : agoTxt(f.mtime)}</span><div class="win">${win}</div><span class="car"></span></div>`;
+      <span class="sub">세션 ${run.length}개 · ${f.active ? '일하는 중' : agoTxt(f.mtime)}</span><div class="win">${win}</div><span class="car"></span></div>`;
   };
   const busyN = SNAP.floors.filter(f => f.active).length;
   const lobby = `<div class="fl lobby ${follow ? 'on' : ''} ${view === 'lobby' ? 'cur' : ''}" data-lobby tabindex="0" title="층별 안내판 보기"><span class="no jua">1F</span><b>로비</b>
@@ -1178,9 +1215,10 @@ function renderDir() {
   const asks = SNAP.floors.filter(f => floorAlert.get(f.proj) === 'ask').length, errs = SNAP.floors.filter(f => floorAlert.get(f.proj) === 'err').length, waits = waitingList().length;
   const ceo = `<div class="fl ceo ${asks ? 'ask' : errs ? 'err' : ''} ${view === 'ceo' ? 'cur' : ''}" data-ceo tabindex="0" title="대표실 — 직원들이 올린 질문·에러 모아 보기"><span class="no jua">대표</span><b>${esc(SNAP.user || '')} 대표실</b>
     <span class="sub">${asks || errs || waits ? [asks && `🙋 질문 ${asks}`, errs && `⚠ 에러 ${errs}`, waits && `💬 답변 대기 ${waits}`].filter(Boolean).join(' · ') : '결재 대기 없음'}</span></div>`;
-  $('#stack').innerHTML = roofg + ceo + SNAP.floors.filter(f => f.n > 0).reverse().map(card).join('') + lobby;
+  const lit = (f) => f.sessions.some(running); // 창문(동작하는 세션)이 없는 층은 건물에서 숨김 — 층 번호는 그대로
+  $('#stack').innerHTML = roofg + ceo + SNAP.floors.filter(f => f.n > 0 && lit(f)).reverse().map(card).join('') + lobby;
   if (lobbyOpen) renderLobby(); else if (bossOpen) renderBoss();
-  const base = SNAP.floors.filter(f => f.n < 0);
+  const base = SNAP.floors.filter(f => f.n < 0 && lit(f));
   $('#base').innerHTML = base.map(card).join(''); $('#rail').classList.toggle('hasBase', !!base.length);
   const ub = $('#unhide'); ub.hidden = !hiddenN; ub.textContent = `숨긴 층 ${hiddenN}개 되돌리기`;
   const f = SNAP.floors.find(x => x.n === curFloorN), s = allSessions().find(x => x.key === curKey);
@@ -1190,7 +1228,7 @@ function renderDir() {
   if (view === 'ceo') syncCeo();
   if (view === 'roof') syncRoof();
   $('#tsub').style.display = 'none'; // 세션 이름(긴 첫 질문)은 안 보여줌 — 세션 ▾ 목록에서 볼 수 있음
-  $('#sessBtn').textContent = f ? `세션 ${f.total}개 ▾` : '세션 ▾';
+  $('#sessBtn').textContent = f ? `세션 ${f.sessions.filter(running).length}개 ▾` : '세션 ▾';
   $('#mproj').textContent = s && s.cwd ? s.cwd.replace(/^\/(Users|home)\/[^/]+/, '~') : (f ? f.proj : '-');
   $('#msess').textContent = s ? s.sid.slice(0, 8) : '-';
   if ($('#pop').classList.contains('open')) renderPop();
@@ -1202,7 +1240,7 @@ function renderDir() {
 function renderPop() {
   const f = SNAP.floors.find(x => x.n === curFloorN); if (!f) return;
   $('#pop').innerHTML = `<label><input type="checkbox" id="fol" ${follow ? 'checked' : ''}>지금 일하는 세션 자동으로 따라가기</label>` +
-    f.sessions.map(s => `<div class="ss ${s.key === curKey ? 'cur' : ''}" role="menuitem" tabindex="0" data-k="${esc(s.key)}"><span class="who ${s.agent === 'codex' ? 'cx' : ''}">${s.agent === 'codex' ? 'Codex' : 'Claude'}</span><span class="t">${esc(s.label)}</span>${s.active ? '<span class="now">● 지금</span>' : `<span class="w">${agoTxt(s.mtime)}</span>`}</div>`).join('');
+    f.sessions.filter(running).map(s => `<div class="ss ${s.key === curKey ? 'cur' : ''}" role="menuitem" tabindex="0" data-k="${esc(s.key)}"><span class="who ${s.agent === 'codex' ? 'cx' : ''}">${s.agent === 'codex' ? 'Codex' : 'Claude'}</span><span class="t">${esc(s.label)}</span>${s.active ? '<span class="now">● 지금</span>' : `<span class="w">${agoTxt(s.mtime)}</span>`}</div>`).join('');
   $('#fol').onchange = (e) => setFollow(e.target.checked);
 }
 function closePop() { $('#pop').classList.remove('open'); $('#sessBtn').setAttribute('aria-expanded', 'false'); }
@@ -1459,7 +1497,7 @@ function setFollow(v) { follow = v; if (v) onSnap(); else renderDir(); }
 let switching = false;
 async function switchTo(key) {
   const s = allSessions().find(x => x.key === key); if (!s) return;
-  if (scene && scene.workers.has(key)) { // 같은 사무실 안에서 주인공만 바꿈 (다시 그리지 않음)
+  if (scene && scene.workers.has(key) && !scene.workers.get(key).leaving) { // 같은 사무실 안에서 주인공만 바꿈 (다시 그리지 않음)
     curKey = key; curFloorN = s.floor.n; scene.primary = key; renderDir(); syncCompanion(); return;
   }
   const prevN = curFloorN; curKey = key; curFloorN = s.floor.n;
