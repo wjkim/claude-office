@@ -18,6 +18,8 @@ const BOOT_BYTES = 256 * 1024;
 const CODEX_ON = !process.env.NO_CODEX;
 const CODEX_DIR = process.env.CODEX_SESSIONS_DIR || path.join(os.homedir(), '.codex', 'sessions');
 const CODEX_INDEX = path.join(path.dirname(CODEX_DIR), 'session_index.jsonl');
+// Orca 는 Codex 를 계정별 홈(codex-accounts/*/home, codex-runtime-home/home)으로 띄움 → 그 sessions 도 같이 읽음
+const ORCA_DIR = path.join(process.platform === 'win32' ? (process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')) : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.config'), 'orca');
 const USER = (() => { try { return os.userInfo().username; } catch { return '나'; } })();// 처음 볼 때 현재 상태를 복원하려고 읽는 꼬리 크기
 
 // ───────── 도구 → 방 ─────────
@@ -352,11 +354,11 @@ function tail() {
   for (const F of files.values()) {
     if (now - F.mtime > HOT_MS) continue;
     let st; try { st = fs.statSync(F.fp); } catch { continue; }
-    F.mtime = st.mtimeMs;
+    F.mtime = F.codex && st.size > F.offset ? now : Math.max(F.mtime, st.mtimeMs); // Codex 기록은 수정 시각이 만든 시각에 멈춰 있음 → 크기가 늘면 지금 바뀐 것
     if (st.size < F.offset) { F.offset = 0; F.rem = ''; }
     if (st.size > F.offset) {
       const S = sessions.get(F.key);
-      if (!F.agentFile || F.codex) S.mtime = Math.max(S.mtime, st.mtimeMs);
+      if (!F.agentFile || F.codex) S.mtime = Math.max(S.mtime, F.mtime);
       try { feed(F, readRange(F.fp, F.offset, st.size), true); } catch { }
       F.offset = st.size;
     }
@@ -489,29 +491,33 @@ function codexKidsTick() {
   const now = Date.now();
   for (const [S, C] of codexKids) if (C.active && C.pendingDone && now - C.last > 20e3) { C.active = false; C.pendingDone = false; ev(S, true, { k: 'agentDone', id: `cx:${C.id}:${C.n}` }); }
 }
+const codexByName = new Set(); // 따라 읽는 rollout 파일 이름(세션 ID 포함)
 function trackCodex(fp) {
   let st; try { st = fs.statSync(fp); } catch { return; }
   let F = files.get(fp);
-  if (F) { F.mtime = st.mtimeMs; const S = sessions.get(F.key); if (S) S.mtime = Math.max(S.mtime, st.mtimeMs); return; }
+  if (!F && codexByName.has(path.basename(fp))) return; // Orca 가 끝난 세션을 ~/.codex 에도 같은 이름으로 남김 → 한 번만 따라 읽음
+  if (F) { F.mtime = st.size > F.offset ? Date.now() : Math.max(F.mtime, st.mtimeMs); const S = sessions.get(F.key); if (S) S.mtime = Math.max(S.mtime, F.mtime); return; }
   let meta = {};
   try { const o = JSON.parse(firstLine(fp)); if (o && o.type === 'session_meta') meta = o.payload || {}; } catch { }
   const fid = (path.basename(fp).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/) || [])[1];
   const id = meta.id || fid; if (!id) return;
+  let m = st.mtimeMs; // 수정 시각이 만든 시각에 멈춰 있으니 마지막 줄의 timestamp 로 언제까지 일했는지 봄
+  if (Date.now() - m < 8 * 864e5) { try { const ts = readRange(fp, Math.max(0, st.size - 65536), st.size).match(/\{"timestamp":"[^"]+"/g); if (ts) m = Math.max(m, Date.parse(ts.pop().slice(14, -1)) || 0); } catch { } }
   let S, child = null;
   if (meta.parent_thread_id) { S = getSession('codex', meta.parent_thread_id); if (!S.agent || S.agent === 'claude') { S.agent = 'codex'; if (!S.cwd) S.main = false; } child = { id, type: codexSubType(meta), n: 0, active: false }; codexKids.push([S, child]); }
   else { S = getSession('codex', id); S.agent = 'codex'; S.main = true; if (meta.cwd) S.cwd = meta.cwd; if (meta.timestamp) S.started = Date.parse(meta.timestamp) || 0; }
-  S.mtime = Math.max(S.mtime, st.mtimeMs);
-  F = { fp, key: S.key, codex: true, child, offset: 0, rem: '', mtime: st.mtimeMs };
-  if (!child && Date.now() - st.mtimeMs < 8 * 864e5) { try { codexRateBoot(fp, st.size); } catch { } }
-  files.set(fp, F);
+  S.mtime = Math.max(S.mtime, m);
+  F = { fp, key: S.key, codex: true, child, offset: 0, rem: '', mtime: m };
+  if (!child && Date.now() - m < 8 * 864e5) { try { codexRateBoot(fp, st.size); } catch { } }
+  files.set(fp, F); codexByName.add(path.basename(fp));
   try {
     if (!child && !S.firstPrompt) {
       const head = readRange(fp, 0, Math.min(st.size, 512 * 1024)).split('\n');
       for (const l of head) { if (!l.includes('"UserMessage"')) continue; try { const t = textItems(JSON.parse(l).payload.item.content); if (t) { S.firstPrompt = snip(t, 40); break; } } catch { } }
     }
-    if (monthKey(st.mtimeMs) === monthKey(Date.now())) scanToday(S, fp, st.size);
-    if (dayKey(st.mtimeMs) === dayKey(Date.now())) scanDayLines(S, fp, st.size, F);
-    if (Date.now() - st.mtimeMs < HOT_MS) {
+    if (monthKey(m) === monthKey(Date.now())) scanToday(S, fp, st.size);
+    if (dayKey(m) === dayKey(Date.now())) scanDayLines(S, fp, st.size, F);
+    if (Date.now() - m < HOT_MS) {
       const start = Math.max(0, st.size - BOOT_BYTES);
       let txt = readRange(fp, start, st.size);
       if (start > 0) txt = txt.slice(txt.indexOf('\n') + 1);
@@ -524,9 +530,11 @@ function scanCodex() {
   if (!CODEX_ON) return;
   loadCodexIndex();
   const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
-  for (const y of ls(CODEX_DIR)) { if (!/^\d{4}$/.test(y)) continue;
-    for (const m of ls(path.join(CODEX_DIR, y))) for (const d of ls(path.join(CODEX_DIR, y, m))) {
-      const dir = path.join(CODEX_DIR, y, m, d);
+  const roots = [CODEX_DIR, path.join(ORCA_DIR, 'codex-runtime-home', 'home', 'sessions'),
+    ...ls(path.join(ORCA_DIR, 'codex-accounts')).map(a => path.join(ORCA_DIR, 'codex-accounts', a, 'home', 'sessions'))];
+  for (const R of roots) for (const y of ls(R)) { if (!/^\d{4}$/.test(y)) continue;
+    for (const m of ls(path.join(R, y))) for (const d of ls(path.join(R, y, m))) {
+      const dir = path.join(R, y, m, d);
       for (const f of ls(dir)) if (f.endsWith('.jsonl')) trackCodex(path.join(dir, f));
     }
   }

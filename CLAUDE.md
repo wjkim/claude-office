@@ -48,6 +48,8 @@ Claude Code와 Codex가 남기는 작업 기록을 읽어서, 브라우저 속 �
 
 - **Claude 기록**: `~/.claude/projects/<인코딩된 폴더>/<세션>.jsonl`, 서브에이전트는 `<세션>/subagents/*.jsonl`. `applyLine()` / `applySub()`가 해석.
 - **Codex 기록**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`.zst`는 압축된 지난 기록이라 건너뜀). 첫 줄 `session_meta`에 `id`, `cwd`, 하위 에이전트면 `parent_thread_id`.
+  - Orca 는 Codex 를 계정별 홈(`<Orca>/codex-accounts/*/home`, `codex-runtime-home/home`, Windows `<Orca>` = `%APPDATA%\orca`)으로 띄워서 실시간 기록이 거기 쌓이고, 나중에 `~/.codex/sessions`에 같은 이름(하드 링크)으로 생김 → `scanCodex`가 모두 훑되 파일 이름이 같으면 한 번만 따라 읽음(`codexByName`).
+  - Codex 0.163 기록은 크기만 늘고 **수정 시각이 파일 만든 시각에 멈춰 있음**(fstat 도 같음). 그래서 Codex 파일은 크기가 늘면 지금 바뀐 것으로 보고(`tail`, `trackCodex`), 처음 읽을 땐 끝 64KB의 마지막 `timestamp`를 마지막 기록 시각으로 씀.
   - 실시간 이동은 `response_item` 의 `custom_tool_call`(name `exec`, input은 JS 코드 — `cmd:"..."`를 정규식으로 뽑음)
   - 끝난 작업은 `event_msg` → `item_completed` 의 `item.type`: `UserMessage`, `AgentMessage`, `Reasoning`(summary_text), `CommandExecution`(parsed_cmd, exit_code), `FileChange`, `McpToolCall`, `Extension`(웹 검색)
   - 하위 스레드(`thread_source: guardian_review`)는 **검토 요원**(Guardian). 한 명이 머물다 20초 조용하면 퇴근(`codexKidsTick`).

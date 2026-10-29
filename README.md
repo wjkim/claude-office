@@ -219,6 +219,7 @@ printf '%s' "$INPUT" | python "$HOME/.claude/statusline.py"
 ## 🧩 Codex도 같이 (자동)
 
 OpenAI Codex(앱 또는 CLI)를 쓰면 `~/.codex/sessions` 기록도 같이 읽어요. 따로 설정할 건 없어요.
+Orca가 계정별로 띄운 Codex 기록(`%APPDATA%\orca\codex-accounts\*\home\sessions`)도 같이 읽어요.
 
 - 헤드셋을 쓴 **Codex 직원**이 개발실 왼쪽 청록 명패 책상에 앉아요
 - 작업 폴더가 같으면 Claude와 **같은 층**에서 같이 일해요
