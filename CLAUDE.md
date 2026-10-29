@@ -55,7 +55,7 @@ Claude Code와 Codex가 남기는 작업 기록을 읽어서, 브라우저 속 �
   - 하위 스레드(`thread_source: guardian_review`)는 **검토 요원**(Guardian). 한 명이 머물다 20초 조용하면 퇴근(`codexKidsTick`).
   - 세션 제목은 `~/.codex/session_index.jsonl`의 `thread_name`.
 - 이벤트 종류(`k`): `tool`(room, tool, detail), `think`, `say`, `error`, `user`, `spawn`, `agentTool`, `agentErr`, `agentDone`, `board`.
-- **층 = 작업 폴더(cwd)**. Claude와 Codex의 cwd가 같거나 한쪽이 다른 쪽 안이면 같은 층으로 합침(홈 폴더 수준은 합치지 않음). 층 번호는 이름순.
+- **층 = 작업 폴더(cwd)**. Claude와 Codex의 cwd가 같거나 한쪽이 다른 쪽 안이면 같은 층으로 합침(홈 폴더 수준은 합치지 않음). 층 번호는 화면(`applySnap`)이 매김: 건물에 보이는 층(`shown` 세션이 있는 층)을 이름순으로 2F부터 빈 번호 없이, 안 보이는 층은 그 뒤 번호. 층이 생기거나 사라지면 snap 마다 다시 매김.
 - 가리기 모드(캡처용): `#privBtn` → `body.priv`, 이름·층/세션 이름·일지·말풍선 등을 `filter: blur`. 새 화면 요소에 개인 내용이 들어가면 `body.priv` 선택자 목록에 추가할 것.
 - 층 꾸미기: `layout.deco[proj]` = { theme, cat, fish, flower }. `THEMES`(grass·floor·wall 덧칠), `decoItems()`가 소품을 깊이순 목록에 넣음. 층 정리 창의 '꾸미기' 줄.
 - 날씨: `weatherOn(e)`(think → 구름 `target`↑, error → `rainUntil`, wait/agentDone → `sunUntil`) + `drawWeather()`(구름 `CLOUDS`, 비, 해/밤엔 별). 지금 층(scene) 이벤트만.
@@ -76,7 +76,7 @@ Claude Code와 Codex가 남기는 작업 기록을 읽어서, 브라우저 속 �
 - 디자인 방향: **하늘에 떠 있는 잔디 섬 위의 미니어처 디오라마**. 밝고 귀여운 장난감 느낌, 외곽선 있는 가구, 심즈처럼 낮게 잘린 벽. 흰 배경 SaaS 대시보드처럼 되지 않게 할 것.
 - 글꼴: 제목 `Jua`(주아체), 본문 `IBM Plex Sans KR` (Google Fonts).
 - 오른쪽 버튼 줄(`#tools`): 확대·축소·전체 · 밤 모드 · ⚙️ 설정 · 가리기.
-- 레이아웃: 왼쪽 **건물 단면**(층 카드, 창문 하나 = 지금 동작하는 세션 하나 — `running(s)`: Claude 는 `closed` 아님, Codex 는 15분 안에 움직였고 `waiting` 아님. 층 카드의 세션 수와 세션 ▾ 목록도 같은 기준, 로비 통계는 전체 세션 기준, 노란 불 = 지금 일하는 중, 청록 줄 = Codex 세션) / 가운데 디오라마 + 아래 **근무표 카드** / 오른쪽 **업무 일지** 타임라인.
+- 레이아웃: 왼쪽 **건물 단면**(층 카드, 창문 하나 = 지금 보이는 세션 하나 — `shown(s)` = `running(s)`(Claude 는 `closed` 아님, Codex 는 15분 안에 움직였고 `waiting` 아님) 이거나 대표실에서 답을 기다리는 세션(`waiting` 3시간 안). 작업을 마친 Codex 만 남은 층도 보임. 층 카드의 세션 수와 세션 ▾ 목록도 같은 기준, 로비 통계는 전체 세션 기준, 노란 불 = 지금 일하는 중, 청록 줄 = Codex 세션) / 가운데 디오라마 + 아래 **근무표 카드** / 오른쪽 **업무 일지** 타임라인.
 - 좌표: 타일 단위(`WORLD` 22×18), `P(x,y,z)`로 아이소 투영. 가구는 `add()`로 등록하고 `x+y` 깊이순 정렬해서 그림.
 - 방(`ROOMS`): 자료실(읽기·검색) · 개발실(코드 수정, **Claude·Codex 자리**) · 서버실(명령·git) · 정보검색실(웹·MCP) · 회의실(계획·할 일, 화이트보드) · 휴게실(`rest`, 커피 카운터·소파 — 2분 넘게 쉬면 여기로). 각 층에 사용자 캐릭터(`scene.me`)는 없음 — 사용자는 **대표실**에 있음. 질문(서버 room `boss`)은 엘리베이터 타고 대표실로 올라감(`goUp`: `actor.away`면 안 그림, `W.upstairs`) → 다음 이벤트가 오면 `comeDown`으로 엘리베이터에서 다시 나옴. 말을 마치고 답을 기다릴 때(Claude `stop_reason: end_turn`, Codex `task_complete`/`turn_aborted`)도 서버가 `wait` 이벤트를 보내고 세션에 `waiting`(시각)을 실음 → 대표실로 올라감, 결재함 '💬 답변 대기'(3시간까지). 열린 Claude 세션은 `~/.claude/sessions/<pid>.json`(sessionId, pid)으로 확인(`liveClaude`) — 닫힌 세션은 대기 0. 같은 폴더의 `.key` 파일은 절대 열지 않음. 가운데 가로 복도(`LANE`), 왼쪽 벽에 엘리베이터.
 - 자리(`HOME`): Claude = 개발실 앞쪽 주황 의자 책상(전화·명패·머그), Codex = 개발실 왼쪽 청록 명패 책상. 둘 다 책상 **뒤**에 서 있어서 개발실 안에서는 통로(`DEV_AISLE`)로 돌아 들어감(`route()`).

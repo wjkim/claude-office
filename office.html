@@ -919,6 +919,8 @@ function buildScene(sess) {
 // 같은 층에서 최근(15분 안)에 일한 다른 세션도 같이 출근시킴 — Orca 워커처럼 같은 종류(Claude·Claude)여도 함께
 // 지금 동작하는 세션: Claude 는 프로세스가 열린 세션(closed 아님), Codex 는 15분 안에 움직였고 작업을 마치지 않은(waiting 아님) 세션
 const running = (s) => s.agent === 'codex' ? !!s.state && !s.waiting : !s.closed;
+// 건물 창문에 보이는 세션: 동작 중이거나, 대표실에서 답을 기다리는(결재함에 있는) 세션 — 작업을 마친 Codex 만 남아도 층이 보이게
+const shown = (s) => running(s) || (!!s.waiting && Date.now() - s.waiting < WAIT_MS);
 const MAX_MATES = 6;
 function syncCompanion() {
   if (!scene || !SNAP) return;
@@ -1184,7 +1186,8 @@ function applySnap() { // 정리 규칙대로 층을 다시 묶고, 숨긴 층�
   }).sort((a, b) => a.name.localeCompare(b.name) || a.proj.localeCompare(b.proj));
   hiddenN = ALL.filter(F => hidden.has(F.proj)).length;
   const vis = ALL.filter(F => !hidden.has(F.proj)), base = RAW.self && vis.find(F => F.proj === rootOf(RAW.self)); // 클로드 오피스 폴더는 지하 1층 관리실
-  vis.filter(F => F !== base).forEach((F, i) => F.n = i + 2); if (base) base.n = -1; // 1층은 로비
+  const rest = vis.filter(F => F !== base), lit = (F) => F.sessions.some(shown); // 건물에 보이는 층(창문 있는 층)부터 2F, 3F… 빈 번호 없이, 안 보이는 층은 그 뒤 번호
+  [...rest.filter(lit), ...rest.filter(F => !lit(F))].forEach((F, i) => F.n = i + 2); if (base) base.n = -1; // 1층은 로비
   SNAP = Object.assign({}, RAW, { floors: vis });
   const s = allSessions().find(x => x.key === curKey);
   if (s) curFloorN = s.floor.n; else { curKey = null; curFloorN = null; }
@@ -1201,7 +1204,7 @@ function renderDir() {
   const now = Date.now();
   const card = (f) => {
     const cur = f.n === curFloorN;
-    const run = f.sessions.filter(running); // 창문 = 지금 동작하는 세션만
+    const run = f.sessions.filter(shown); // 창문 = 동작 중이거나 답을 기다리는 세션
     const win = run.slice(0, 10).map(s => `<button class="${s.active ? 'lit' : s.state ? 'warm' : ''} ${s.key === curKey ? 'cur' : ''} ${s.agent === 'codex' ? 'cx' : ''}" data-k="${esc(s.key)}" title="${s.agent === 'codex' ? 'Codex' : 'Claude'} · ${esc(s.label)} · ${agoTxt(s.mtime)}" aria-label="${esc(s.label)}"></button>`).join('');
     const al = floorAlert.get(f.proj);
     return `<div class="fl ${cur ? 'cur' : ''} ${now - f.mtime > 864e5 ? 'dim' : ''} ${al || ''}" data-n="${f.n}" tabindex="0"><button class="x" title="층 정리 (이름 · 합치기 · 세션 옮기기 · 숨기기)" aria-label="${esc(f.name)} 층 정리">⋯</button><span class="no jua">${fno(f.n)}</span><b>${esc(f.name)}${al ? `<span class="tag">${al === 'ask' ? '🙋 질문' : '⚠ 에러'}</span>` : ''}</b>
@@ -1215,7 +1218,7 @@ function renderDir() {
   const asks = SNAP.floors.filter(f => floorAlert.get(f.proj) === 'ask').length, errs = SNAP.floors.filter(f => floorAlert.get(f.proj) === 'err').length, waits = waitingList().length;
   const ceo = `<div class="fl ceo ${asks ? 'ask' : errs ? 'err' : ''} ${view === 'ceo' ? 'cur' : ''}" data-ceo tabindex="0" title="대표실 — 직원들이 올린 질문·에러 모아 보기"><span class="no jua">대표</span><b>${esc(SNAP.user || '')} 대표실</b>
     <span class="sub">${asks || errs || waits ? [asks && `🙋 질문 ${asks}`, errs && `⚠ 에러 ${errs}`, waits && `💬 답변 대기 ${waits}`].filter(Boolean).join(' · ') : '결재 대기 없음'}</span></div>`;
-  const lit = (f) => f.sessions.some(running); // 창문(동작하는 세션)이 없는 층은 건물에서 숨김 — 층 번호는 그대로
+  const lit = (f) => f.sessions.some(shown); // 창문(동작·답변 대기 세션)이 없는 층은 건물에서 숨김 — 보이는 층은 applySnap 이 2F 부터 이어서 번호를 매김
   $('#stack').innerHTML = roofg + ceo + SNAP.floors.filter(f => f.n > 0 && lit(f)).reverse().map(card).join('') + lobby;
   if (lobbyOpen) renderLobby(); else if (bossOpen) renderBoss();
   const base = SNAP.floors.filter(f => f.n < 0 && lit(f));
@@ -1228,7 +1231,7 @@ function renderDir() {
   if (view === 'ceo') syncCeo();
   if (view === 'roof') syncRoof();
   $('#tsub').style.display = 'none'; // 세션 이름(긴 첫 질문)은 안 보여줌 — 세션 ▾ 목록에서 볼 수 있음
-  $('#sessBtn').textContent = f ? `세션 ${f.sessions.filter(running).length}개 ▾` : '세션 ▾';
+  $('#sessBtn').textContent = f ? `세션 ${f.sessions.filter(shown).length}개 ▾` : '세션 ▾';
   $('#mproj').textContent = s && s.cwd ? s.cwd.replace(/^\/(Users|home)\/[^/]+/, '~') : (f ? f.proj : '-');
   $('#msess').textContent = s ? s.sid.slice(0, 8) : '-';
   if ($('#pop').classList.contains('open')) renderPop();
@@ -1240,7 +1243,7 @@ function renderDir() {
 function renderPop() {
   const f = SNAP.floors.find(x => x.n === curFloorN); if (!f) return;
   $('#pop').innerHTML = `<label><input type="checkbox" id="fol" ${follow ? 'checked' : ''}>지금 일하는 세션 자동으로 따라가기</label>` +
-    f.sessions.filter(running).map(s => `<div class="ss ${s.key === curKey ? 'cur' : ''}" role="menuitem" tabindex="0" data-k="${esc(s.key)}"><span class="who ${s.agent === 'codex' ? 'cx' : ''}">${s.agent === 'codex' ? 'Codex' : 'Claude'}</span><span class="t">${esc(s.label)}</span>${s.active ? '<span class="now">● 지금</span>' : `<span class="w">${agoTxt(s.mtime)}</span>`}</div>`).join('');
+    f.sessions.filter(shown).map(s => `<div class="ss ${s.key === curKey ? 'cur' : ''}" role="menuitem" tabindex="0" data-k="${esc(s.key)}"><span class="who ${s.agent === 'codex' ? 'cx' : ''}">${s.agent === 'codex' ? 'Codex' : 'Claude'}</span><span class="t">${esc(s.label)}</span>${s.active ? '<span class="now">● 지금</span>' : `<span class="w">${agoTxt(s.mtime)}</span>`}</div>`).join('');
   $('#fol').onchange = (e) => setFollow(e.target.checked);
 }
 function closePop() { $('#pop').classList.remove('open'); $('#sessBtn').setAttribute('aria-expanded', 'false'); }
