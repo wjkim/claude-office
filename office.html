@@ -916,9 +916,9 @@ function buildScene(sess) {
   $('#alog').innerHTML = '<div class="none">아직 기록이 없어요. 이 층에서 Claude나 Codex가 움직이면 여기에 쌓여요.</div>';
   renderCrew();
 }
-// 같은 층에서 최근(15분 안)에 일한 다른 세션도 같이 출근시킴 — Orca 워커처럼 같은 종류(Claude·Claude)여도 함께
+// 같은 층에서 최근(15분 안)에 일한 다른 세션과 대표실에서 답을 기다리는 세션도 같이 출근시킴 — Orca 워커처럼 같은 종류(Claude·Claude)여도 함께
 // 지금 동작하는 세션: Claude 는 프로세스가 열린 세션(closed 아님), Codex 는 15분 안에 움직였고 작업을 마치지 않은(waiting 아님) 세션
-const running = (s) => s.agent === 'codex' ? !!s.state && !s.waiting : !s.closed;
+const running = (s) => s.agent === 'codex' ? !!s.state && !s.waiting && !s.closed : !s.closed;
 // 건물 창문에 보이는 세션: 동작 중이거나, 대표실에서 답을 기다리는(결재함에 있는) 세션 — 작업을 마친 Codex 만 남아도 층이 보이게
 const shown = (s) => running(s) || (!!s.waiting && Date.now() - s.waiting < WAIT_MS);
 const MAX_MATES = 6;
@@ -926,9 +926,14 @@ function syncCompanion() {
   if (!scene || !SNAP) return;
   const P = primary(); if (!P) return;
   const f = SNAP.floors.find(x => x.sessions.some(s => s.key === scene.primary)); if (!f) return;
-  const mates = new Set(f.sessions.filter(s => s.key !== scene.primary && s.state && running(s)).sort((a, b) => b.mtime - a.mtime).slice(0, MAX_MATES).map(s => s.key));
+  // 대표실에서 답을 기다리는 세션도 이 층 직원 — 대표님이 내려오면 따라 내려와서 보고 (15분 제한·종류 상관없이)
+  const upstairs = (s) => !!s.waiting && !s.closed && Date.now() - s.waiting < WAIT_MS;
+  const mates = new Set(f.sessions.filter(s => s.key !== scene.primary && ((s.state && running(s)) || upstairs(s))).sort((a, b) => b.mtime - a.mtime).slice(0, MAX_MATES).map(s => s.key));
   for (const [k, W] of scene.workers) if (k !== scene.primary && !mates.has(k)) leaveWorker(W);
-  for (const s of f.sessions) if (mates.has(s.key) && !scene.workers.has(s.key)) scene.workers.set(s.key, makeWorker(s));
+  for (const s of f.sessions) if (mates.has(s.key) && !scene.workers.has(s.key)) {
+    const W = makeWorker(s); scene.workers.set(s.key, W);
+    if (W.upstairs && scene.me) { comeDown(W); reportToMe(W); } // 대표님이 이미 와 계시면 바로 내려와서 보고
+  }
   scene.workers.forEach(nameActor); renderCrew();
 }
 

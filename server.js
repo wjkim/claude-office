@@ -6,7 +6,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 
 const PORT = +process.env.PORT || 4777;
 const ROOT = process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
@@ -584,6 +584,34 @@ function liveClaude() {
   return live;
 }
 
+// ───────── 지금 떠 있는 Codex 프로세스 ─────────
+// Codex 기록엔 PID 가 없어서 세션과 프로세스를 짝지을 수 없음 → 프로세스 시작 시각으로 어림잡음:
+// 세션의 마지막 기록보다 먼저 떠 있던 codex 프로세스가 하나도 없으면 터미널을 닫은 세션으로 봄.
+// (한 터미널에서 /new 로 바꾼 옛 세션은 걸러지지 않음) 조회가 무거워서 10초마다, 실패하면 null → 거르지 않음
+const CODEX_PROC_MS = 10e3;
+let codexStarts = null;
+function pollCodexProcs() {
+  const done = (err, out) => { codexStarts = err ? null : String(out).split(/\r?\n/).map(Number).filter(n => n > 0); };
+  if (process.platform === 'win32') {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "Get-CimInstance Win32_Process -Filter \"Name='codex.exe'\" | % { [DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds() }"],
+      { windowsHide: true, timeout: 20e3 }, done);
+  } else {
+    // etime = 띄운 뒤 지난 시간 [[일-]시:]분:초 — Linux·macOS 둘 다 됨
+    execFile('ps', ['-A', '-o', 'etime=,comm='], { timeout: 20e3 }, (err, out) => {
+      if (err) return done(err);
+      const now = Date.now(), starts = [];
+      for (const line of String(out).split('\n')) {
+        const m = line.trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s+(.+)$/);
+        if (m && path.basename(m[5]) === 'codex') starts.push(now - ((((+m[1] || 0) * 24 + (+m[2] || 0)) * 60 + +m[3]) * 60 + +m[4]) * 1000);
+      }
+      done(null, starts.join('\n'));
+    });
+  }
+}
+// ps 의 etime 은 초 단위라 2초 여유
+const codexOpen = (S) => !codexStarts || codexStarts.some(t => t <= S.mtime + 2000);
+
 // ───────── 층 안내판 ─────────
 const normPath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
 const depth = (p) => p.split('/').filter(Boolean).length;
@@ -642,7 +670,7 @@ function handleSetup(req, res) {
 }
 function snapshot() {
   const conf = readConf(), live = liveClaude();
-  const waitOf = (S) => !S.waiting ? 0 : (S.agent !== 'codex' && live && !live.has(S.sid)) ? 0 : S.waiting; // 닫힌 세션은 대기 아님
+  const waitOf = (S) => !S.waiting ? 0 : (S.agent === 'codex' ? !codexOpen(S) : live && !live.has(S.sid)) ? 0 : S.waiting; // 닫힌 세션은 대기 아님
   const now = Date.now();
   const list = [...sessions.values()].filter(S => S.main !== false);
   // 작업 폴더가 같으면 (또는 한쪽이 다른 쪽 안이면) 같은 층 — Claude 와 Codex 가 한 사무실에서 일함
@@ -669,7 +697,7 @@ function snapshot() {
       return {
         n: i + 1, proj: f.p, name: f.name, mtime, active: now - mtime < ACTIVE_MS, total: list.length,
         sessions: list.slice(0, 40).map(S => ({
-          key: S.key, sid: S.sid, agent: S.agent, work: workOf(S), month: monthMin(S), day: dayOf(S), waiting: waitOf(S), closed: S.agent !== 'codex' && !!live && !live.has(S.sid), cwd: S.cwd, tools: S.tools, started: S.started, mtime: S.mtime, active: now - S.mtime < ACTIVE_MS,
+          key: S.key, sid: S.sid, agent: S.agent, work: workOf(S), month: monthMin(S), day: dayOf(S), waiting: waitOf(S), closed: S.agent === 'codex' ? !!S.waiting && !codexOpen(S) : !!live && !live.has(S.sid), cwd: S.cwd, tools: S.tools, started: S.started, mtime: S.mtime, active: now - S.mtime < ACTIVE_MS,
           label: S.summary || codexTitles.get(S.sid) || S.firstPrompt || new Date(S.mtime).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
           state: now - S.mtime < HOT_MS ? {
             room: S.room, tool: S.tool, detail: S.detail, mood: S.mood, bubble: S.bubble,
@@ -714,6 +742,7 @@ setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 15e3)
 scan();
 setInterval(scan, SCAN_MS);
 setInterval(tail, TAIL_MS);
+if (CODEX_ON) { pollCodexProcs(); setInterval(pollCodexProcs, CODEX_PROC_MS); }
 
 server.listen(PORT, '127.0.0.1', () => {
   const url = `http://localhost:${PORT}`;
