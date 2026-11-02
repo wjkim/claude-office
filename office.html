@@ -396,13 +396,36 @@ const PEOPLE = {
   codex: { body: '#2e3646', hair: '#2a211c', label: 'Codex', dot: '#14a085', headset: '#14a085', mark: '◇' },
   Guardian: { body: '#d9a930', hair: '#4a3426', cap: '#2e3646', label: '검토 요원', dot: '#d9a930' },
   Helper: { body: '#5fc4ae', hair: '#5a3a26', label: 'Codex 도우미', dot: '#5fc4ae' },
-  me: { body: '#34466b', hair: '#2a1d17', dot: '#d38f22' }, // 대표: 짧은 머리 · 남색 정장
+  me: { body: '#34466b', hair: '#2a1d17', dot: '#d38f22', tie: '#c8323c' }, // 대표: 짧은 머리 · 남색 정장 · 빨간 넥타이
   barista: { body: '#6b4a33', hair: '#2a1d17', dot: '#c58449', apron: '#f3e4cf', cap: '#3a2a20' }, // 로비 카페 바리스타
   guide: { body: '#2b9672', hair: '#2a1d17', dot: '#2b9672', long: true, lady: true, pin: '#ffffff' }, // 로비 안내원
   other: { body: '#7d8899', hair: '#3a3128', dot: '#7d8899' },
 };
 const pkey = (t) => PEOPLE[t] ? t : 'other';
 const plabel = (t) => (PEOPLE[t] && PEOPLE[t].label) || t;
+// 직원 외모(성별 · 옷 색 · 옷 모양)는 세션(서브에이전트) key 로 정하는 랜덤 — 같은 직원은 어느 화면에서도, 새로고침해도 같은 모습.
+// 종류 표시(✳ · ◇ · 헤드셋 · 모자 · 안경)와 이름표 색은 그대로 둠. 대표 · 안내원 · 바리스타는 key 없이 만들어서 고정 외모
+const LOOK = {
+  body: ['#e2733f', '#2e3646', '#4a7fe0', '#3fa46a', '#8a5fd0', '#d9a930', '#c2475b', '#2b9672', '#6b7280', '#b5651d', '#e98aa3', '#5fc4ae'],
+  hair: ['#2a1d17', '#5b3a26', '#7a5230', '#3a3128', '#a0522d', '#1c1c24'],
+  legs: ['#3d4257', '#2b2f3a', '#4b5a78', '#6b5a4a', '#5c6470'],
+  tie: ['#c8323c', '#2f5fb3', '#2b9672', '#d9a930', '#6b3fa0'],
+  top: ['plain', 'collar', 'tie', 'hoodie', 'cardigan', 'stripe'], // tie 는 여자 직원이면 리본
+};
+const LOOKS = new Map();
+function lookFor(kind, key) {
+  const base = PEOPLE[kind];
+  if (!key || /^(me|guide|barista)$/.test(kind)) return base;
+  const id = kind + '|' + key; if (LOOKS.has(id)) return LOOKS.get(id);
+  let h = 2166136261; for (const c of String(key)) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  const rnd = () => { h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); return ((h ^= h >>> 16) >>> 0) / 4294967296; };
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const fem = rnd() < .5, body = pick(LOOK.body);
+  const L = { ...base, body, hair: pick(LOOK.hair), legs: pick(LOOK.legs), top: pick(LOOK.top), fem };
+  if (L.top === 'tie') L.tie = pick(LOOK.tie);
+  if (fem) { L.long = rnd() < .7; L.skirt = rnd() < .5 ? shade(body, -.28) : ''; if (rnd() < .4) L.pin = '#ffffff'; }
+  LOOKS.set(id, L); return L;
+}
 
 // ───────── 캔버스 · 카메라 ─────────
 const cv = $('#cv'), center = $('#center'), ov = $('#ov');
@@ -720,8 +743,24 @@ function buildWalls() {
 
 // ───────── 사람 그리기 ─────────
 const OUT = 'rgba(50,35,50,.38)';
+// 흰 셔츠 깃 + 넥타이 (여자 직원이면 리본)
+function drawTie(by, color, bow) {
+  ctx.beginPath(); ctx.moveTo(-4.2, by + .4); ctx.lineTo(4.2, by + .4); ctx.lineTo(0, by + 6.5); ctx.closePath(); ctx.fillStyle = '#ffffff'; ctx.fill();
+  ctx.fillStyle = color;
+  if (bow) { ctx.beginPath(); ctx.moveTo(0, by + 3); ctx.lineTo(-4, by + 1); ctx.lineTo(-4, by + 5); ctx.closePath(); ctx.moveTo(0, by + 3); ctx.lineTo(4, by + 1); ctx.lineTo(4, by + 5); ctx.closePath(); ctx.fill(); circle(0, by + 3, 1.3, shade(color, -.2)); return; }
+  ctx.beginPath(); ctx.moveTo(-1.5, by + 1); ctx.lineTo(1.5, by + 1); ctx.lineTo(1, by + 3.4); ctx.lineTo(-1, by + 3.4); ctx.closePath(); ctx.fill(); // 매듭
+  ctx.beginPath(); ctx.moveTo(-1.1, by + 3.4); ctx.lineTo(1.1, by + 3.4); ctx.lineTo(2.3, by + 11); ctx.lineTo(0, by + 13.6); ctx.lineTo(-2.3, by + 11); ctx.closePath(); ctx.fill();
+}
+// 옷 모양 (lookFor 의 top)
+function drawTop(L, by) {
+  const lite = shade(L.body, .35), dark = shade(L.body, -.22);
+  if (L.top === 'collar') { ctx.beginPath(); ctx.moveTo(-4.5, by + .4); ctx.lineTo(0, by + 4.5); ctx.lineTo(-1.6, by + 6); ctx.closePath(); ctx.moveTo(4.5, by + .4); ctx.lineTo(0, by + 4.5); ctx.lineTo(1.6, by + 6); ctx.closePath(); ctx.fillStyle = '#ffffff'; ctx.fill(); }
+  else if (L.top === 'hoodie') { rrect(-5, by - 1.5, 10, 4, 2, dark); ctx.strokeStyle = lite; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-1.8, by + 2); ctx.lineTo(-1.8, by + 7); ctx.moveTo(1.8, by + 2); ctx.lineTo(1.8, by + 7); ctx.stroke(); rrect(-5, by + 11, 10, 5, 2, dark); }
+  else if (L.top === 'cardigan') { rrect(-2.2, by + .5, 4.4, 17, 1.5, '#f4f1ea'); for (const y of [5, 9.5, 14]) circle(3.4, by + y, .9, dark); }
+  else if (L.top === 'stripe') { rrect(-8.5, by + 6, 17, 2.2, 1, lite); rrect(-8.5, by + 11, 17, 2.2, 1, lite); }
+}
 function drawPerson(a, t) {
-  const L = PEOPLE[a.kind];
+  const L = a.lk || PEOPLE[a.kind], fem = L.lady || L.fem;
   const [sx, sy] = P(a.x, a.y);
   const walk = a.walking, ph = t * 11 + a.seed;
   const bob = walk ? Math.abs(Math.sin(ph)) * 2.2 : a.mood === 'work' ? Math.abs(Math.sin(t * 7 + a.seed)) * 1 : 0;
@@ -730,15 +769,18 @@ function drawPerson(a, t) {
   if (!a.avatar && a.x < 1.2) ctx.globalAlpha = Math.max(0, Math.min(1, elevOpen * 1.4, (a.x - .2) * 1.6 + elevOpen));
   ellipse(0, 0, 10, 4.2, 'rgba(30,35,60,.16)');
   const sw = walk ? Math.sin(ph) * 2.4 : 0;
-  rrect(-6, -12 - Math.max(0, sw), 5, 11, 2.5, '#3d4257'); rrect(1, -12 - Math.max(0, -sw), 5, 11, 2.5, '#3d4257');
-  const by = -28 - bob;
+  const legs = L.legs || '#3d4257';
+  rrect(-6, -12 - Math.max(0, sw), 5, 11, 2.5, legs); rrect(1, -12 - Math.max(0, -sw), 5, 11, 2.5, legs);
+  const by = -28 - bob, hy = by - 11;
+  if (L.long) rrect(-14, hy - 6, 28, 26, 11, L.hair); // 어깨까지 오는 뒷머리는 몸 뒤에 (옷 · 넥타이를 가리지 않게)
   rrect(-11.5, by + 3 + sw * .6, 4.5, 11, 2.2, shade(L.body, -.12), OUT);
   rrect(7, by + 3 - sw * .6, 4.5, 11, 2.2, shade(L.body, -.12), OUT);
   rrect(-8.5, by, 17, 18, 7.5, L.body, OUT);
   if (L.apron) { rrect(-6, by + 5, 12, 13, 3, L.apron, OUT); rrect(-2.5, by + 9, 5, 3, 1, shade(L.apron, -.15)); } // 앞치마
-  if (L.mark) { ctx.fillStyle = '#fff'; ctx.font = '700 8px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(L.mark, 0, by + 11); }
-  const hy = by - 11;
-  if (L.long) { rrect(-14, hy - 6, 28, 26, 11, L.hair); rrect(-15, hy + 8, 7, 12, 3.5, shade(L.hair, .06)); rrect(8, hy + 8, 7, 12, 3.5, shade(L.hair, .06)); } // 어깨까지 오는 머리
+  if (L.top) drawTop(L, by);
+  if (L.tie) drawTie(by, L.tie, L.fem);
+  if (L.mark) { const side = L.tie || L.top === 'cardigan' || L.top === 'hoodie' || L.top === 'collar'; ctx.fillStyle = '#fff'; ctx.font = `700 ${side ? 6 : 8}px sans-serif`; ctx.textAlign = 'center'; ctx.fillText(L.mark, side ? -4.6 : 0, by + (side ? 9.5 : 11)); } // 가운데에 넥타이 · 단추가 있으면 왼쪽 가슴에
+  if (L.long) { rrect(-15, hy + 8, 7, 12, 3.5, shade(L.hair, .06)); rrect(8, hy + 8, 7, 12, 3.5, shade(L.hair, .06)); } // 어깨에 걸친 옆머리
   if (L.skirt) { ctx.beginPath(); ctx.moveTo(-8, by + 14); ctx.lineTo(8, by + 14); ctx.lineTo(10, by + 22); ctx.lineTo(-10, by + 22); ctx.closePath(); ctx.fillStyle = L.skirt; ctx.fill(); }
   if (L.lady) { ctx.beginPath(); ctx.moveTo(-3.5, by + .5); ctx.lineTo(3.5, by + .5); ctx.lineTo(0, by + 7); ctx.closePath(); ctx.fillStyle = '#ffffff'; ctx.fill(); circle(0, by + 9, 1.3, '#ffd34d'); } // 블라우스 깃 · 브로치
   circle(0, hy, 12.5, '#ffd9ba', OUT);
@@ -752,9 +794,9 @@ function drawPerson(a, t) {
   const bt = t * 1.3 + a.seed, blink = Math.floor(bt) % 5 === 0 && bt % 1 < .12;
   if (blink) { ctx.fillStyle = '#2b2232'; ctx.fillRect(-6.4, hy + 2, 4, 1.3); ctx.fillRect(2.4, hy + 2, 4, 1.3); }
   else { ellipse(-4.4, hy + 2.2, 1.9, 2.5, '#2b2232'); ellipse(4.4, hy + 2.2, 1.9, 2.5, '#2b2232'); circle(-3.8, hy + 1.3, .7, '#fff'); circle(5, hy + 1.3, .7, '#fff'); }
-  if (L.lady && !blink) { ctx.strokeStyle = '#2b2232'; ctx.lineWidth = 1; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(-6.4, hy + .6); ctx.lineTo(-7.6, hy - .4); ctx.moveTo(6.4, hy + .6); ctx.lineTo(7.6, hy - .4); ctx.stroke(); } // 속눈썹
-  ellipse(-7.4, hy + 6, 2.3, 1.4, L.lady ? 'rgba(255,110,140,.55)' : 'rgba(255,128,128,.45)'); ellipse(7.4, hy + 6, 2.3, 1.4, L.lady ? 'rgba(255,110,140,.55)' : 'rgba(255,128,128,.45)');
-  ctx.strokeStyle = L.lady ? '#d9466a' : '#7a4b38'; ctx.lineWidth = L.lady ? 1.6 : 1.2; ctx.lineCap = 'round'; ctx.beginPath();
+  if (fem && !blink) { ctx.strokeStyle = '#2b2232'; ctx.lineWidth = 1; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(-6.4, hy + .6); ctx.lineTo(-7.6, hy - .4); ctx.moveTo(6.4, hy + .6); ctx.lineTo(7.6, hy - .4); ctx.stroke(); } // 속눈썹
+  ellipse(-7.4, hy + 6, 2.3, 1.4, fem ? 'rgba(255,110,140,.55)' : 'rgba(255,128,128,.45)'); ellipse(7.4, hy + 6, 2.3, 1.4, fem ? 'rgba(255,110,140,.55)' : 'rgba(255,128,128,.45)');
+  ctx.strokeStyle = fem ? '#d9466a' : '#7a4b38'; ctx.lineWidth = fem ? 1.6 : 1.2; ctx.lineCap = 'round'; ctx.beginPath();
   if (a.mood === 'think') { ctx.moveTo(-1.6, hy + 7); ctx.lineTo(1.6, hy + 7); ctx.stroke(); rrect(6, hy + 5, 5.5, 5.5, 2.6, '#ffd9ba', OUT); }
   else if (a.mood === 'sweat') { ctx.arc(0, hy + 8, 2, 1.15 * Math.PI, 1.85 * Math.PI); ctx.stroke(); }
   else { ctx.arc(0, hy + 5.5, 2.2, .15 * Math.PI, .85 * Math.PI); ctx.stroke(); }
@@ -766,20 +808,21 @@ function drawPerson(a, t) {
   ctx.restore();
 }
 const AVATAR = {};
-function avatar(kind) {
-  if (AVATAR[kind]) return AVATAR[kind];
+function avatar(kind, key) {
+  kind = pkey(kind); const id = kind + '|' + (key || '');
+  if (AVATAR[id]) return AVATAR[id];
   const c = document.createElement('canvas'); c.width = c.height = 88;
   const keep = ctx; ctx = c.getContext('2d');
   ctx.translate(44, 108);
-  drawPerson({ kind, x: 0, y: 0, walking: false, mood: '', seed: .3, shakeUntil: 0, badge: '', avatar: true }, 0);
+  drawPerson({ kind, lk: lookFor(kind, key), x: 0, y: 0, walking: false, mood: '', seed: .3, shakeUntil: 0, badge: '', avatar: true }, 0);
   ctx = keep;
-  return (AVATAR[kind] = c.toDataURL());
+  return (AVATAR[id] = c.toDataURL());
 }
 
 // ───────── 사람(배우) ─────────
 class Actor {
-  constructor(kind, x, y) {
-    this.kind = pkey(kind); this.x = x; this.y = y; this.path = []; this.walking = false; this.mood = ''; this.badge = '';
+  constructor(kind, x, y, key) { // key: 세션 · 서브에이전트 id — 있으면 그걸로 외모를 정함 (lookFor)
+    this.kind = pkey(kind); this.lk = lookFor(this.kind, key); this.x = x; this.y = y; this.path = []; this.walking = false; this.mood = ''; this.badge = '';
     this.seed = Math.random() * 10; this.res = null; this.shakeUntil = 0;
     this.nm = document.createElement('div'); this.nm.className = 'nm'; this.nm.style.borderBottomColor = PEOPLE[this.kind].dot;
     this.bub = document.createElement('div'); this.bub.className = 'bub'; this.bub.hidden = true;
@@ -886,22 +929,23 @@ function makeWorker(sess) {
   const kind = sess.agent === 'codex' ? 'codex' : 'claude';
   const st = sess.state || { room: 'desk', agents: [], board: [], idle: true };
   // 자리 번호: 층 폴더에서 일하는 세션(팀장)은 0, 팀원은 비어 있는 가장 작은 번호 (층 폴더 세션이 같이 일하고 있으면 1부터)
-  const kindOf = (s) => s.agent === 'codex' ? 'codex' : 'claude', isLead = (s) => String(s.cwd || '').replace(/\\/g, '/').replace(/\/+$/, '') === curProj();
+  const isLead = (s) => normDir(s.cwd) === curProj();
   const f = SNAP && SNAP.floors.find(x => x.proj === curProj());
   const leadOn = !isLead(sess) && f && f.sessions.some(s => s.key !== sess.key && kindOf(s) === kind && isLead(s) && s.state && !s.closed);
   const used = new Set(scene ? [...scene.workers.values()].filter(x => x.kind === kind).map(x => x.seat) : []);
   let seat = leadOn ? 1 : 0; while (used.has(seat)) seat++;
-  const W = { key: sess.key, kind, seat, dir: String(sess.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '', agents: new Map(), lastEv: st.idle ? 0 : Date.now(), board: st.board || [],
+  const waiting = sess.waiting && Date.now() - sess.waiting < WAIT_MS, rest = st.idle || (waiting && !isLeader(sess)); // 일을 마친 팀원은 휴게실에서 쉼
+  const W = { key: sess.key, kind, seat, dir: String(sess.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '', agents: new Map(), lastEv: rest ? 0 : Date.now(), board: st.board || [],
     tools: sess.tools || 0, started: sess.started || sess.mtime, lastTool: fmtTool(st.tool, st.detail), label: sess.label };
-  const sp = spotFor(st.idle ? 'rest' : (st.room || 'desk'), null, kind, seat);
-  W.actor = new Actor(kind, sp.x, sp.y); nameActor(W);
-  // 답 기다리는 중이면 대표실에 올라가 있는 상태로
-  if (sess.waiting && Date.now() - sess.waiting < WAIT_MS) { W.actor.x = SPOTS.elevIn[0]; W.actor.y = SPOTS.elevIn[1]; W.actor.away = true; W.upstairs = true; W.actor.badge = 'ask'; }
-  if (!st.idle) { W.actor.mood = st.mood || ''; if (st.mood === 'think' && st.bubble) W.actor.say('think', '고민 중…', st.bubble.text, 6000); }
+  const sp = spotFor(rest ? 'rest' : (st.room || 'desk'), null, kind, seat);
+  W.actor = new Actor(kind, sp.x, sp.y, sess.key); nameActor(W);
+  // 답 기다리는 팀장은 대표실에 올라가 있는 상태로
+  if (waiting && !rest) { W.actor.x = SPOTS.elevIn[0]; W.actor.y = SPOTS.elevIn[1]; W.actor.away = true; W.upstairs = true; W.actor.badge = 'ask'; }
+  if (!rest) { W.actor.mood = st.mood || ''; if (st.mood === 'think' && st.bubble) W.actor.say('think', '고민 중…', st.bubble.text, 6000); }
   else W.actor.badge = 'coffee';
   for (const a of st.agents || []) {
     const idx = freeIdx(W), s = spotFor(a.room === 'lobby' ? 'lobby' : a.room, idx, kind);
-    const act = new Actor(a.type, s.x, s.y); act.setName(plabel(a.type), a.desc);
+    const act = new Actor(a.type, s.x, s.y, a.id); act.setName(plabel(a.type), a.desc);
     if (a.tool) act.mood = 'work';
     W.agents.set(a.id, { actor: act, info: a, idx, leaving: false, tools: a.tools || 0, since: a.since || Date.now(), last: fmtTool(a.tool, a.detail) });
   }
@@ -920,14 +964,25 @@ function buildScene(sess) {
 // 지금 동작하는 세션: Claude 는 프로세스가 열린 세션(closed 아님), Codex 는 15분 안에 움직였고 작업을 마치지 않은(waiting 아님) 세션
 const running = (s) => s.agent === 'codex' ? !!s.state && !s.waiting && !s.closed : !s.closed;
 // 건물 창문에 보이는 세션: 동작 중이거나, 대표실에서 답을 기다리는(결재함에 있는) 세션 — 작업을 마친 Codex 만 남아도 층이 보이게
-const shown = (s) => running(s) || (!!s.waiting && Date.now() - s.waiting < WAIT_MS);
+const shown = (s) => running(s) || (!!s.waiting && Date.now() - s.waiting < WAIT_MS && isLeader(s));
+// 결재는 팀장만: 층마다 종류(Claude·Codex)별로 팀장 한 명만 대표실에 올라가고, 일을 마친 팀원은 쉬다가 퇴근
+// 팀장 = 지금 보는 층은 자리 번호 0 직원, 다른 층(또는 0번이 없으면)은 층 폴더에서 일하는 세션 → 가장 최근에 움직인 세션
+const kindOf = (s) => s.agent === 'codex' ? 'codex' : 'claude';
+const normDir = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+function teamLead(f, kind) {
+  if (scene && f.n === curFloorN) for (const W of scene.workers.values()) if (W.kind === kind && !W.seat && !W.leaving) return W.key;
+  const c = f.sessions.filter(s => kindOf(s) === kind && (running(s) || (s.waiting && Date.now() - s.waiting < WAIT_MS)));
+  c.sort((a, b) => (normDir(b.cwd) === f.proj) - (normDir(a.cwd) === f.proj) || b.mtime - a.mtime);
+  return c[0] && c[0].key;
+}
+const isLeader = (s, f = SNAP && SNAP.floors.find(x => x.sessions.some(y => y.key === s.key))) => !f || teamLead(f, kindOf(s)) === s.key;
 const MAX_MATES = 6;
 function syncCompanion() {
   if (!scene || !SNAP) return;
   const P = primary(); if (!P) return;
   const f = SNAP.floors.find(x => x.sessions.some(s => s.key === scene.primary)); if (!f) return;
   // 대표실에서 답을 기다리는 세션도 이 층 직원 — 대표님이 내려오면 따라 내려와서 보고 (15분 제한·종류 상관없이)
-  const upstairs = (s) => !!s.waiting && !s.closed && Date.now() - s.waiting < WAIT_MS;
+  const upstairs = (s) => !!s.waiting && !s.closed && Date.now() - s.waiting < WAIT_MS && isLeader(s, f); // 답 기다리는 팀원은 퇴근
   const mates = new Set(f.sessions.filter(s => s.key !== scene.primary && ((s.state && running(s)) || upstairs(s))).sort((a, b) => b.mtime - a.mtime).slice(0, MAX_MATES).map(s => s.key));
   for (const [k, W] of scene.workers) if (k !== scene.primary && !mates.has(k)) leaveWorker(W);
   for (const s of f.sessions) if (mates.has(s.key) && !scene.workers.has(s.key)) {
@@ -940,7 +995,7 @@ function syncCompanion() {
 async function spawnAgent(W, e) {
   if (W.agents.has(e.id)) return;
   const idx = freeIdx();
-  const act = new Actor(e.type, SPOTS.elevIn[0], SPOTS.elevIn[1]); act.setName(plabel(e.type), e.desc);
+  const act = new Actor(e.type, SPOTS.elevIn[0], SPOTS.elevIn[1], e.id); act.setName(plabel(e.type), e.desc);
   const A = { actor: act, info: e, idx, leaving: false, pending: null, arriving: true, tools: 0, since: Date.now(), last: '출근하는 중' };
   W.agents.set(e.id, A); renderCrew();
   elevTarget = 1; await sleep(650); if (W.gone) return;
@@ -1063,7 +1118,8 @@ function onEv(e) {
       c.goto(spotFor(e.room, null, W.kind, W.seat));
       break;
     }
-    case 'wait': if (!W.upstairs) { c.badge = 'ask'; if (scene.me) reportToMe(W); else { c.say('report', '다 했어요!', '대표실에서 답 기다릴게요', 3500); goUp(W); } } break;
+    case 'wait': if (!isLeader({ key: W.key, agent: W.kind })) { c.mood = ''; c.badge = 'coffee'; W.lastEv = 0; c.say('report', '다 했어요!', '잠깐 쉬러 갈게요 ☕', 3500); c.goto(spotFor('rest', null, W.kind, W.seat)); } // 팀원은 결재 대신 휴식 (Codex 는 곧 퇴근)
+    else if (!W.upstairs) { c.badge = 'ask'; if (scene.me) reportToMe(W); else { c.say('report', '다 했어요!', '대표실에서 답 기다릴게요', 3500); goUp(W); } } break;
     case 'think': c.mood = 'think'; c.say('think', '고민 중…', e.text, 8000); break;
     case 'say': c.mood = ''; c.say('', '', e.text, 6000); break;
     case 'error': c.mood = 'sweat'; c.shakeUntil = performance.now() + 900; c.say('error', '실패', e.text, 5000); setTimeout(() => { if (c.mood === 'sweat') c.mood = ''; }, 5000); break;
@@ -1116,11 +1172,11 @@ function renderCrew() {
   const ws = [...scene.workers.values()].sort((a, b) => (b.key === scene.primary) - (a.key === scene.primary));
   for (const W of ws) {
     const [sc, st] = workerStatus(W);
-    h += `<div class="cr ${W.kind}" data-w="${esc(W.key)}"><img src="${avatar(W.kind)}" alt=""><div class="m"><div class="r1"><b>${esc(wname(W))}</b><span class="st ${sc}">${st}</span></div>
+    h += `<div class="cr ${W.kind}" data-w="${esc(W.key)}"><img src="${avatar(W.kind, W.key)}" alt=""><div class="m"><div class="r1"><b>${esc(wname(W))}</b><span class="st ${sc}">${st}</span></div>
       <div class="r2">${esc(W.lastTool || '개발실 자기 자리')}</div><div class="r3">도구 ${W.tools}회 · ${ago(W.started)}째 근무${W.key !== scene.primary ? ` · 같은 층 다른 세션${W.dir ? ` (${esc(W.dir)})` : ''}` : ''}</div></div></div>`;
     for (const [id, A] of W.agents) {
       const s = A.leaving ? ['report', '보고 중'] : A.actor.mood === 'sweat' ? ['sweat', '진땀'] : A.arriving ? ['rest', '출근 중'] : ['work', '일하는 중'];
-      h += `<div class="cr" data-w="${esc(W.key)}" data-a="${esc(id)}"><img src="${avatar(A.actor.kind)}" alt=""><div class="m"><div class="r1"><b>${esc(A.info.desc || plabel(A.info.type))}</b><span class="st ${s[0]}">${s[1]}</span></div>
+      h += `<div class="cr" data-w="${esc(W.key)}" data-a="${esc(id)}"><img src="${avatar(A.actor.kind, id)}" alt=""><div class="m"><div class="r1"><b>${esc(A.info.desc || plabel(A.info.type))}</b><span class="st ${s[0]}">${s[1]}</span></div>
         <div class="r2">${esc(plabel(A.info.type))} · ${esc(A.last || '')}</div><div class="r3">${esc(wname(W))} 팀 · 도구 ${A.tools}회 · ${ago(A.since)}째</div></div></div>`;
     }
   }
@@ -1383,7 +1439,7 @@ function showBoss(v) { bossOpen = v; lobbyOpen = false; $('#lobbyV').classList.t
 const WAIT_MS = 3 * 3600e3; // 3시간 넘게 답 안 한 건 결재함에서 뺌
 function waitingList() {
   const now = Date.now();
-  return SNAP ? SNAP.floors.flatMap(f => f.sessions.filter(s => s.waiting && now - s.waiting < WAIT_MS && !floorAlert.has(f.proj)).map(s => ({ f, s }))) : [];
+  return SNAP ? SNAP.floors.flatMap(f => f.sessions.filter(s => s.waiting && now - s.waiting < WAIT_MS && !floorAlert.has(f.proj) && isLeader(s, f)).map(s => ({ f, s }))) : []; // 결재는 팀장만
 }
 function renderBoss() {
   const wrows = waitingList().map(({ f, s }) => `<div class="rw" data-n="${f.n}" data-k="${esc(s.key)}" tabindex="0"><span class="no jua">${fno(f.n)}</span><b>💬 ${esc(staff(s.agent === 'codex' ? 'codex' : 'claude', f.proj))} · ${esc(f.name)}</b>
@@ -1812,7 +1868,7 @@ function syncCeo() {
   list.forEach((x, i) => {
     let a = ceoQ.get(x.s.key); const [sx, sy] = ceoSlot(i);
     if (!a) {
-      a = new Actor(x.s.agent === 'codex' ? 'codex' : 'claude', CEO_ELEV.in[0], CEO_ELEV.in[1]); a.scene = 'ceo';
+      a = new Actor(x.s.agent === 'codex' ? 'codex' : 'claude', CEO_ELEV.in[0], CEO_ELEV.in[1], x.s.key); a.scene = 'ceo';
       ceoQ.set(x.s.key, a); ceoActors.push(a);
       elevTarget = 1; setTimeout(() => { elevTarget = 0; }, 1200);
       a.walk([CEO_ELEV.out, [sx, CEO_ELEV.out[1]], [sx, sy]]);
@@ -1824,7 +1880,7 @@ function syncCeo() {
 }
 function renderCeoCrew() {
   const list = ceoWaiting();
-  $('#crew').innerHTML = list.length ? list.map(({ f, s, kind, text }) => `<div class="cr ${s.agent === 'codex' ? 'codex' : 'claude'}" data-goto="${esc(s.key)}" style="cursor:pointer"><img src="${avatar(s.agent === 'codex' ? 'codex' : 'claude')}" alt=""><div class="m">
+  $('#crew').innerHTML = list.length ? list.map(({ f, s, kind, text }) => `<div class="cr ${s.agent === 'codex' ? 'codex' : 'claude'}" data-goto="${esc(s.key)}" style="cursor:pointer"><img src="${avatar(s.agent === 'codex' ? 'codex' : 'claude', s.key)}" alt=""><div class="m">
       <div class="r1"><b>${esc(staff(s.agent === 'codex' ? 'codex' : 'claude', f.proj))}</b><span class="st ${kind === 'err' ? 'sweat' : 'think'}">${kind === 'ask' ? '🙋 질문' : kind === 'err' ? '⚠ 에러' : '💬 답변 대기'}</span></div>
       <div class="r2">${esc(text || '')}</div><div class="r3">${fno(f.n)} ${esc(f.name)}${s.waiting ? ' · ' + agoTxt(s.waiting) + '부터' : ''} · 누르면 그 층으로</div></div></div>`).join('')
     : `<div class="cr"><img src="${avatar('me')}" alt=""><div class="m"><div class="r1"><b>결재함이 비었어요</b></div><div class="r2">다들 열심히 일하는 중 ☕</div></div></div>`;
@@ -1905,7 +1961,7 @@ function drawRoofLights(t) { // 밤: 퍼걸러 줄전구
 function roofResting() { // 일을 멈추고 쉬는 직원 (90초 ~ 30분 전까지 일함, 답 기다리는 사람은 대표실)
   const now = Date.now(), out = [];
   for (const f of SNAP ? SNAP.floors : []) for (const s of f.sessions) {
-    if (s.active || s.waiting || now - s.mtime > 30 * 60e3) continue;
+    if (s.active || (s.waiting && isLeader(s, f)) || now - s.mtime > 30 * 60e3) continue; // 답 기다리는 팀원은 옥상에서 쉼
     out.push({ f, s });
   }
   return out.slice(0, ROOF_SPOTS.length);
@@ -1920,7 +1976,7 @@ function syncRoof() {
   list.forEach(({ f, s }) => {
     if (roofQ.has(s.key)) return;
     const spot = ROOF_SPOTS.findIndex((_, i) => !used.has(i)); if (spot < 0) return; used.add(spot);
-    const kind = s.agent === 'codex' ? 'codex' : 'claude', a = new Actor(kind, ...RF.door); a.scene = 'roof'; a.spot = spot; a.badge = 'coffee';
+    const kind = s.agent === 'codex' ? 'codex' : 'claude', a = new Actor(kind, ...RF.door, s.key); a.scene = 'roof'; a.spot = spot; a.badge = 'coffee';
     a.setName(staff(kind, f.proj), fno(f.n)); roofQ.set(s.key, a); roofActors.push(a);
     elevTarget = 1; setTimeout(() => { elevTarget = 0; }, 1000);
     const [x, y] = ROOF_SPOTS[spot];
@@ -1930,7 +1986,7 @@ function syncRoof() {
 }
 function renderRoofCrew() {
   const list = roofResting();
-  $('#crew').innerHTML = list.length ? list.map(({ f, s }) => { const k = s.agent === 'codex' ? 'codex' : 'claude'; return `<div class="cr ${k}" data-goto="${esc(s.key)}" style="cursor:pointer"><img src="${avatar(k)}" alt=""><div class="m"><div class="r1"><b>${esc(staff(k, f.proj))}</b><span class="st rest">🌿 쉬는 중</span></div>
+  $('#crew').innerHTML = list.length ? list.map(({ f, s }) => { const k = s.agent === 'codex' ? 'codex' : 'claude'; return `<div class="cr ${k}" data-goto="${esc(s.key)}" style="cursor:pointer"><img src="${avatar(k, s.key)}" alt=""><div class="m"><div class="r1"><b>${esc(staff(k, f.proj))}</b><span class="st rest">🌿 쉬는 중</span></div>
       <div class="r2">${fno(f.n)} ${esc(f.name)}</div><div class="r3">${agoTxt(s.mtime)}부터 쉬는 중 · 누르면 그 층으로</div></div></div>`; }).join('')
     : `<div class="cr"><img src="${avatar('claude')}" alt=""><div class="m"><div class="r1"><b>옥상이 조용해요</b></div><div class="r2">쉬러 올라온 직원이 없어요 🌿</div></div></div>`;
 }
@@ -2041,7 +2097,7 @@ function lobbyTick() { // 층이 일을 시작하면 출근(정문 → 엘리베
 }
 function lobbyWalk(f, goIn) {
   const s = f.sessions[0], kind = s.agent === 'codex' ? 'codex' : 'claude';
-  const a = new Actor(kind, ...(goIn ? LB.door : LB.elevIn)); a.scene = 'lobby'; a.setName(staff(kind, f.proj), fno(f.n)); lobbyActors.push(a);
+  const a = new Actor(kind, ...(goIn ? LB.door : LB.elevIn), s.key); a.scene = 'lobby'; a.setName(staff(kind, f.proj), fno(f.n)); lobbyActors.push(a);
   const done = () => { a.remove(); lobbyActors.splice(lobbyActors.indexOf(a), 1); };
   if (goIn && Math.random() < .5) { // 절반은 카페에 들러 커피를 사 감
     a.walk([LB.doorIn, [CAFE_SPOT[0], LB.doorIn[1]], CAFE_SPOT]).then(() => { a.say('', '', '아메리카노 한 잔이요!', 1800); return sleep(1600); })

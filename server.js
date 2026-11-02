@@ -615,6 +615,25 @@ const codexOpen = (S) => !codexStarts || codexStarts.some(t => t <= S.mtime + 20
 // ───────── 층 안내판 ─────────
 const normPath = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
 const depth = (p) => p.split('/').filter(Boolean).length;
+// git worktree 폴더(원본 밖 형제 폴더 포함)는 원본 저장소 경로로 바꿈 → 같은 층. worktree 의 .git 파일 = "gitdir: <원본>/.git/worktrees/<이름>"
+const repoOf = new Map();
+function mainPath(p) {
+  if (!p) return p;
+  if (repoOf.has(p)) return repoOf.get(p);
+  let out = p;
+  for (let d = p; depth(d) > 1; d = path.posix.dirname(d)) {
+    try {
+      const st = fs.statSync(d + '/.git');
+      if (st.isFile()) {
+        const m = fs.readFileSync(d + '/.git', 'utf8').match(/^gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/][^\\/\r\n]+\s*$/m);
+        if (m) out = normPath(m[1]) + p.slice(d.length);
+      }
+      break; // .git 폴더(원본) 또는 .git 파일을 찾으면 멈춤
+    } catch { }
+  }
+  repoOf.set(p, out); // 지워진 worktree 는 그대로 (ponytail: 폴더가 없으면 원본을 못 찾음)
+  return out;
+}
 function projName(p, list) {
   if (!p.startsWith('dir:')) return path.posix.basename(p) || p;
   const parts = p.slice(4).split('-').filter(Boolean);
@@ -674,7 +693,7 @@ function snapshot() {
   const now = Date.now();
   const list = [...sessions.values()].filter(S => S.main !== false);
   // 작업 폴더가 같으면 (또는 한쪽이 다른 쪽 안이면) 같은 층 — Claude 와 Codex 가 한 사무실에서 일함
-  const keyOf = new Map(list.map(S => [S, normPath(S.cwd) || ('dir:' + S.proj)]));
+  const keyOf = new Map(list.map(S => [S, mainPath(normPath(S.cwd)) || ('dir:' + S.proj)]));
   const paths = [...new Set(keyOf.values())].filter(k => !k.startsWith('dir:')).sort((a, b) => a.length - b.length);
   const canon = new Map();
   for (const k of paths) {
