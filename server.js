@@ -541,14 +541,16 @@ function scanCodex() {
 }
 
 // ───────── 사용량 (항상 화면 오른쪽 위) ─────────
-// Codex: 기록의 token_count 에 rate_limits(5시간 primary · 주간 secondary)가 그대로 있음 → 가장 최근 것
+// Codex: 가장 최근 token_count의 rate_limits를 window_minutes 기준으로 분류
 // Claude: 기록엔 없음. statusline.js(Claude Code 상태줄)가 받은 rate_limits 를 usage.json 에 적어 둔 걸 읽음
 let codexUsage = null;
 function codexRate(pl, ts) {
   const r = pl.rate_limits; if (!r) return;
   const at = Date.parse(ts) || Date.now(); if (codexUsage && codexUsage.at > at) return;
   const win = (w) => w && typeof w.used_percent === 'number' ? { used: w.used_percent, resets_at: w.resets_at || 0 } : null;
-  codexUsage = { five_hour: win(r.primary), seven_day: win(r.secondary), plan: r.plan_type || '', at };
+  const windows = [r.primary, r.secondary];
+  codexUsage = { five_hour: win(windows.find(w => w && w.window_minutes === 300)),
+    seven_day: win(windows.find(w => w && w.window_minutes === 10080)), plan: r.plan_type || '', at };
 }
 function codexRateBoot(fp, size) { // 가장 최근 Codex 파일 끝부분에서 마지막 사용량 찾기
   const txt = readRange(fp, Math.max(0, size - 256 * 1024), size).split('\n');
